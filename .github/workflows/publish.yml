@@ -1,0 +1,47 @@
+# Stages a release to npm on a v* tag, authenticating with OIDC instead of a token: npmjs.com is
+# configured to trust this repository and this workflow filename, so no secret exists to leak or
+# rotate. Renaming this file breaks publishing until the trusted publisher is updated to match.
+#
+# This stages rather than publishes. Agents can open, review and merge pull requests here, and a
+# tag is cheap to create, so the step that makes a version public stays behind a human 2FA
+# challenge: approve it under Staged Packages on npmjs.com, or with `npm stage approve <stage-id>`.
+# Inspect first with `npm stage list`, `npm stage view <id>` and `npm stage download <id>`.
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  id-token: write # required: lets the runner mint the OIDC token npm verifies
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest # trusted publishing does not support self-hosted runners
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      # A tag that disagrees with package.json would publish the wrong version, or fail late and
+      # leave the tag behind. Check it before anything is built.
+      - name: Tag matches package.json version
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          declared="$(node -p 'require("./package.json").version')"
+          test "$tagged" = "$declared" || {
+            echo "tag $GITHUB_REF_NAME does not match package.json $declared" >&2
+            exit 1
+          }
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      # Provenance is attached automatically for a public package from a public repository.
+      # Staging needs npm >= 11.15.0, which Node 24 satisfies (11.17.0 at the time of writing).
+      - run: npm stage publish
