@@ -6,7 +6,7 @@ A publishable Pi extension that watches a running bash command and uses Jev to c
 
 A test runner can repeat a shared setup error for minutes; an upload can repeatedly reject the same credentials. Returning control early lets the agent investigate instead of waiting for the process to exit.
 
-`pi-lookout` is the package name (available on npm when checked). Version 0.1.0 implements this design in `lookout.ts`; it has not been published.
+`pi-lookout` is the npm package name. Version 0.1.0 implements this design in `lookout.ts` and is published on npm; later versions are staged from `v*` tags by `.github/workflows/publish.yml`.
 
 ## Public contract
 
