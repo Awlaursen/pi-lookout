@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,8 +98,22 @@ const redactNames = (env: NodeJS.ProcessEnv) =>
 		.filter(Boolean);
 
 /** The values masked before anything else looks at the text, longest first. */
+/**
+ * The Jev key: JEV_API_KEY, or else the contents of the file JEV_API_KEY_FILE names. The file is
+ * read on use, so the key can stay out of the environment every bash command inherits.
+ */
+export function jevKey(env: NodeJS.ProcessEnv): string | undefined {
+	if (env.JEV_API_KEY) return env.JEV_API_KEY;
+	if (!env.JEV_API_KEY_FILE) return;
+	try {
+		return readFileSync(env.JEV_API_KEY_FILE, "utf8").trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function exactSecrets(env: NodeJS.ProcessEnv): string[] {
-	const values = [env.JEV_API_KEY, ...redactNames(env).map((name) => env[name])].filter(
+	const values = [jevKey(env), ...redactNames(env).map((name) => env[name])].filter(
 		(value): value is string => !!value,
 	);
 	// A multi-line value can straddle two checks, so its longer lines are masked on their own too.
@@ -111,7 +125,9 @@ export const maskExact = (text: string, secrets: string[]) =>
 	secrets.reduce((masked, secret) => masked.split(secret).join("[REDACTED]"), text);
 
 function setupProblem(env: NodeJS.ProcessEnv): string | undefined {
-	if (!env.JEV_API_KEY) return "JEV_API_KEY is not set";
+	if (!jevKey(env)) {
+		return env.JEV_API_KEY_FILE ? `cannot read a key from JEV_API_KEY_FILE (${env.JEV_API_KEY_FILE})` : "JEV_API_KEY is not set";
+	}
 	const unset = redactNames(env).filter((name) => !env[name]);
 	if (unset.length) return `PI_LOOKOUT_REDACT_ENV names unset variables: ${unset.join(", ")}`;
 }
@@ -323,7 +339,7 @@ export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 			"No supplied block establishes a current problem requiring intervention, or later output shows that it was resolved.";
 		const res = await deps.fetch(ENDPOINT, {
 			method: "POST",
-			headers: { authorization: `Bearer ${process.env.JEV_API_KEY}`, "content-type": "application/json" },
+			headers: { authorization: `Bearer ${jevKey(process.env)}`, "content-type": "application/json" },
 			body: JSON.stringify({
 				model: MODEL,
 				state,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
@@ -336,6 +336,31 @@ test("exact values and scanner findings never reach Jev, and key blocks are scan
 	for (const lines of scanned) {
 		if (lines.some((l) => l.includes("keyline"))) assert.ok(lines.some((l) => l.includes("-----BEGIN")), "key lines scanned without their header");
 	}
+});
+
+test("the key can come from JEV_API_KEY_FILE, stays masked, and an unreadable file disables the lookout", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-lookout-key-"));
+	const keyFile = join(dir, "key");
+	const key = `file-key-${randomBytes(12).toString("hex")}`;
+	writeFileSync(keyFile, `${key}\n`);
+	const auth: string[] = [];
+	const fake = jev(keepGoing);
+	const recording = ((url: string, init: RequestInit) => {
+		auth.push((init.headers as Record<string, string>).authorization);
+		return fake.fetch(url, init);
+	}) as typeof globalThis.fetch;
+	await withEnv({ JEV_API_KEY: undefined, JEV_API_KEY_FILE: keyFile }, async () => {
+		const h = harness({ fetch: recording });
+		await h.start();
+		await h.run({ command: `cat ${keyFile}; sleep 0.3` });
+	});
+	assert.equal(auth[0], `Bearer ${key}`);
+	assert.doesNotMatch(fake.bodies.join("\n"), new RegExp(key));
+	await withEnv({ JEV_API_KEY: undefined, JEV_API_KEY_FILE: join(dir, "missing") }, async () => {
+		const h = harness({ fetch: fake.fetch });
+		await h.start();
+		assert.match(h.statuses.at(-1)!, /cannot read a key from JEV_API_KEY_FILE/);
+	});
 });
 
 const hasBetterleaks = (await checkBetterleaks()) === undefined;

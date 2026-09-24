@@ -26,7 +26,7 @@ Once published, the intended installation is `pi install npm:pi-lookout`, subjec
 
 | Requirement | Contract |
 | --- | --- |
-| Jev authentication | `JEV_API_KEY` in Pi's process environment; never put the value in package or project settings |
+| Jev authentication | `JEV_API_KEY` in Pi's process environment, or `JEV_API_KEY_FILE` naming a file read per request so the key stays out of the environment bash commands inherit; never put the value in package or project settings |
 | Secret scanner | A supported `betterleaks` executable on `PATH` |
 | Optional exact redaction | `PI_LOOKOUT_REDACT_ENV`, a comma-separated list of environment-variable names whose values must also be masked |
 

@@ -59,7 +59,7 @@ pi install npm:pi-lookout
 
 You need:
 
-- `JEV_API_KEY` in Pi's environment ([get one from TypeSafe](https://docs.typesafe.ai)).
+- A Jev API key ([get one from TypeSafe](https://docs.typesafe.ai)): `JEV_API_KEY` in Pi's environment, or `JEV_API_KEY_FILE` pointing to a file that holds it. The file is read only when a request is made, so the key stays out of the environment of every command your agent runs.
 - [Betterleaks](https://github.com/betterleaks/betterleaks) 1.3 or a later 1.x on `PATH` (tested with 1.3.1). It removes secrets before anything leaves your machine.
 
 Nothing else to configure. If a requirement is missing, bash keeps working as usual and the status bar says why the lookout is off.
@@ -108,7 +108,7 @@ Checks ran every second in this evaluation (every 5 seconds by default), and eac
 
 With the lookout on, pi-lookout sends the command, its `purpose` and bounded excerpts of new output to TypeSafe's API. It never sends your working directory, environment, conversation or other tool results. Before each request:
 
-1. The values of `JEV_API_KEY` and of every variable named in `PI_LOOKOUT_REDACT_ENV` (e.g. `PI_LOOKOUT_REDACT_ENV=GITHUB_TOKEN,NPM_TOKEN`) are replaced with `[REDACTED]`.
+1. The Jev key and the value of every variable named in `PI_LOOKOUT_REDACT_ENV` (e.g. `PI_LOOKOUT_REDACT_ENV=GITHUB_TOKEN,NPM_TOKEN`) are replaced with `[REDACTED]`.
 2. Betterleaks scans everything with its default rules. Project allowlists, `gitleaks:allow` comments and network validation are all ignored. Any line with a finding is replaced by a marker, and `-----BEGIN … -----END` blocks are scanned whole.
 3. If scanning fails, that check sends nothing.
 
