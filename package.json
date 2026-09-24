@@ -1,0 +1,52 @@
+{
+  "name": "pi-lookout",
+  "version": "0.1.0",
+  "description": "Pi extension: watches long bash commands and stops them early when Jev judges that the output shows a failure needing intervention and continuing no longer helps.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Albert Laursen",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Awlaursen/pi-lookout.git"
+  },
+  "homepage": "https://github.com/Awlaursen/pi-lookout#readme",
+  "bugs": {
+    "url": "https://github.com/Awlaursen/pi-lookout/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "bash",
+    "jev",
+    "typesafe",
+    "betterleaks"
+  ],
+  "files": [
+    "lookout.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./lookout.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test lookout.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.87.1",
+    "@types/node": "^22.20.2",
+    "typebox": "^1.3.27",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}
