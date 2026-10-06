@@ -1,15 +1,17 @@
 import { spawn } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ClassifierContext, ClassifierResult } from "@earendil-works/pi-ai";
 import {
 	type BashOperations,
 	createBashToolDefinition,
 	createLocalBashOperations,
 	type ExtensionAPI,
 	type ExtensionUIContext,
+	type ModelRegistry,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -21,7 +23,6 @@ import { Type } from "typebox";
 // Anything that goes wrong on the monitoring side leaves the command running.
 
 const MODEL = "jev-1.13.0"; // pinned: the thresholds below were chosen against this version
-const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const CHECK_INTERVAL_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 20_000;
 const SCAN_TIMEOUT_MS = 10_000;
@@ -48,7 +49,7 @@ const GROUND_RULES =
 
 const QUESTIONS = {
 	intervention_needed: {
-		type: "noul",
+		type: "bool",
 		instructions: `${GROUND_RULES}\n\nDoes the observed output establish a current, unexpected problem that requires action outside this command's ongoing execution to achieve its stated purpose?`,
 		criteria: {
 			true: "The agent or operator must change code, credentials, configuration, dependencies, invocation, or how required input is supplied. The command's ongoing work and plausible automatic recovery cannot resolve the problem. An ordinary test failure counts only when unexpected for the stated purpose.",
@@ -56,14 +57,14 @@ const QUESTIONS = {
 		},
 	},
 	continuation_useful: {
-		type: "noul",
+		type: "bool",
 		instructions: `${GROUND_RULES}\n\nWould allowing this command to continue provide material value toward its stated purpose?`,
 		criteria: {
 			true: "Continued execution can reasonably complete useful work, collect distinct requested diagnostics, recover, or finish cleanup or rollback. A complete failure report makes additional distinct failures useful even after the run is known to fail. Uncertain purpose or missing coverage is not proof that continuation is useless.",
 			false: "Execution is only repeating an established blocker, running work invalidated by failed shared setup, or waiting for input this invocation cannot supply. Evidence supports that continuation provides no material completion, diagnostic, recovery, or cleanup value.",
 		},
 	},
-};
+} satisfies ClassifierContext["questions"];
 
 const DESCRIPTION =
 	"pi-lookout watches the output and may stop the command early when it shows an unexpected problem that needs intervention and continuing no longer serves the command's purpose; the result then says so and quotes the evidence. Optional `purpose`: what success means for this run, and whether every failure must be collected. Optional `lookout: false`: never stop this command early.";
@@ -77,7 +78,6 @@ export type Verdict = { intervention: number; continuation: number; evidence: st
 type Cancel = Verdict & { block: Block };
 
 export interface Deps {
-	fetch: typeof fetch;
 	/** Indexes of the lines that contain a possible secret. Rejects when that is not certain. */
 	scan: (lines: string[], signal: AbortSignal) => Promise<Set<number>>;
 	/** A reason the scanner cannot be used, or undefined when it can. */
@@ -98,22 +98,8 @@ const redactNames = (env: NodeJS.ProcessEnv) =>
 		.filter(Boolean);
 
 /** The values masked before anything else looks at the text, longest first. */
-/**
- * The Jev key: JEV_API_KEY, or else the contents of the file JEV_API_KEY_FILE names. The file is
- * read on use, so the key can stay out of the environment every bash command inherits.
- */
-export function jevKey(env: NodeJS.ProcessEnv): string | undefined {
-	if (env.JEV_API_KEY) return env.JEV_API_KEY;
-	if (!env.JEV_API_KEY_FILE) return;
-	try {
-		return readFileSync(env.JEV_API_KEY_FILE, "utf8").trim() || undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-export function exactSecrets(env: NodeJS.ProcessEnv): string[] {
-	const values = [jevKey(env), ...redactNames(env).map((name) => env[name])].filter(
+export function exactSecrets(env: NodeJS.ProcessEnv, apiKey?: string): string[] {
+	const values = [apiKey, env.TYPESAFE_API_KEY, ...redactNames(env).map((name) => env[name])].filter(
 		(value): value is string => !!value,
 	);
 	// A multi-line value can straddle two checks, so its longer lines are masked on their own too.
@@ -125,9 +111,6 @@ export const maskExact = (text: string, secrets: string[]) =>
 	secrets.reduce((masked, secret) => masked.split(secret).join("[REDACTED]"), text);
 
 function setupProblem(env: NodeJS.ProcessEnv): string | undefined {
-	if (!jevKey(env)) {
-		return env.JEV_API_KEY_FILE ? `cannot read a key from JEV_API_KEY_FILE (${env.JEV_API_KEY_FILE})` : "JEV_API_KEY is not set";
-	}
 	const unset = redactNames(env).filter((name) => !env[name]);
 	if (unset.length) return `PI_LOOKOUT_REDACT_ENV names unset variables: ${unset.join(", ")}`;
 }
@@ -156,21 +139,22 @@ function clip(lines: string[], maxChars: number): string {
 	return text.length > maxChars ? `${text.slice(0, maxChars)} …[shortened]` : text;
 }
 
-export function parseVerdict(body: any, blockIds: string[]): Verdict {
-	const answers = body?.answers;
-	const intervention = answers?.intervention_needed?.noul;
-	const continuation = answers?.continuation_useful?.noul;
-	const evidence = answers?.evidence_block?.choice;
+export function parseVerdict(body: ClassifierResult, blockIds: string[]): Verdict {
+	if (body.stopReason !== "stop") throw new Error(body.errorMessage ?? `Jev ${body.stopReason}`);
+	const answers = body.answers;
+	const intervention = answers.intervention_needed;
+	const continuation = answers.continuation_useful;
+	const evidence = answers.evidence_block;
 	const probability = (x: unknown): x is number => typeof x === "number" && x >= 0 && x <= 1;
 	if (
-		!probability(intervention) ||
-		!probability(continuation) ||
-		typeof evidence !== "string" ||
-		(evidence !== "none" && !blockIds.includes(evidence))
+		intervention?.type !== "bool" || !probability(intervention.probability) ||
+		continuation?.type !== "bool" || !probability(continuation.probability) ||
+		evidence?.type !== "choice" || typeof evidence.choice !== "string" ||
+		(evidence.choice !== "none" && !blockIds.includes(evidence.choice))
 	) {
 		throw new Error("malformed Jev response");
 	}
-	return { intervention, continuation, evidence, model: typeof body.model === "string" ? body.model : MODEL };
+	return { intervention: intervention.probability, continuation: continuation.probability, evidence: evidence.choice, model: body.model };
 }
 
 export const shouldCancel = (v: Verdict) =>
@@ -289,7 +273,6 @@ const realpath = (path: string) => {
 
 export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 	const deps: Deps = {
-		fetch: (...args) => fetch(...args),
 		scan: betterleaksScan,
 		checkScanner: checkBetterleaks,
 		intervalMs: CHECK_INTERVAL_MS,
@@ -305,12 +288,18 @@ export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 		backoffUntil: 0,
 		degraded: undefined as string | undefined,
 		ui: undefined as ExtensionUIContext | undefined,
+		registry: undefined as ModelRegistry | undefined,
 		watches: new Set<{ interrupt(): void; stop(): void }>(),
 	};
 
 	const inactive = (): string | undefined => {
 		if (!session.enabled) return "off";
 		if (isOffline()) return "Pi is in offline mode";
+		if (
+			!session.registry?.getModelOfType?.("classifier", "typesafe", MODEL) &&
+			!session.registry?.getModelOfType?.("classifier", "typesafe", "jev-latest")
+		) return "Pi's TypeSafe classifier provider is unavailable (requires Pi 1.0.4 or later)";
+		if (!session.registry!.getProviderAuthStatus("typesafe").configured) return "TypeSafe is not configured in Pi";
 		return session.conflict ?? setupProblem(process.env) ?? session.scanner;
 	};
 	const describe = () => {
@@ -333,15 +322,16 @@ export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 		refresh();
 	};
 
-	async function ask(state: object, blockIds: string[], signal: AbortSignal): Promise<Verdict> {
-		const choices = Object.fromEntries<string | null>(blockIds.map((id) => [id, null]));
+	async function ask(state: ClassifierContext["state"], blockIds: string[], apiKey: string, signal: AbortSignal): Promise<Verdict> {
+		const choices = Object.fromEntries(blockIds.map((id) => [id, ""]));
 		choices.none =
 			"No supplied block establishes a current problem requiring intervention, or later output shows that it was resolved.";
-		const res = await deps.fetch(ENDPOINT, {
-			method: "POST",
-			headers: { authorization: `Bearer ${jevKey(process.env)}`, "content-type": "application/json" },
-			body: JSON.stringify({
-				model: MODEL,
+		const registry = session.registry!;
+		const model = registry.getModelOfType("classifier", "typesafe", MODEL) ?? registry.getModelOfType("classifier", "typesafe", "jev-latest");
+		if (!model) throw new Error("Pi's TypeSafe classifier provider is unavailable");
+		const result = await registry.classify(
+			{ ...model, id: MODEL },
+			{
 				state,
 				questions: {
 					...QUESTIONS,
@@ -351,11 +341,14 @@ export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 						criteria: choices,
 					},
 				},
-			}),
-			signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
-		});
-		if (!res.ok) throw new Error(`Jev HTTP ${res.status}`);
-		return parseVerdict(await res.json(), blockIds);
+			},
+			{
+				apiKey, // use the same request-time credential that was masked before scanning
+				signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+				maxRetries: 0, // lookout already backs off; keep each check within its deadline
+			},
+		);
+		return parseVerdict(result, blockIds);
 	}
 
 	function watch(command: string, purpose: string | undefined, timeout: number | undefined) {
@@ -473,7 +466,9 @@ export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 			const ctl = new AbortController();
 			current = ctl;
 			try {
-				const secrets = exactSecrets(process.env);
+				const apiKey = await session.registry!.getApiKeyForProvider("typesafe");
+				if (!apiKey) throw new Error("TypeSafe is not configured in Pi");
+				const secrets = exactSecrets(process.env, apiKey);
 				const commandLines = command.split("\n").map(cleanLine);
 				const purposeLines = purpose ? purpose.split("\n").map(cleanLine) : [];
 				const scanned = [...commandLines, ...purposeLines, ...lines].map((line) =>
@@ -510,17 +505,17 @@ export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 						interactive_input: "impossible: the command's stdin is closed",
 					},
 					output: shown.map((b) => (b === overlap ? { ...b, note: "already shown in the previous check" } : b)),
-					retained_evidence: extra && {
+					...(extra ? { retained_evidence: {
 						...extra,
 						note: "earlier output that a previous check flagged as a possible problem; later output may show it resolved",
-					},
+					} } : {}),
 					coverage: {
 						earlier_output: checks ? "reviewed in earlier checks and not repeated here" : "none, this is the first check",
 						lines_never_reviewed: unreviewed + omitted,
 						unterminated_line_in_progress: partial.length > 0,
 					},
 				};
-				const verdict = await ask(state, blocks.map((b) => b.id), ctl.signal);
+				const verdict = await ask(state, blocks.map((b) => b.id), apiKey, ctl.signal);
 				checks++;
 				unreviewed += omitted;
 				last = window.at(-1) ?? last;
@@ -633,6 +628,7 @@ export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 			session.ui = ctx.ui;
 			const arg = args.trim();
 			if (arg === "on") {
+				session.registry = ctx.modelRegistry;
 				session.enabled = true;
 				session.failures = 0;
 				session.backoffUntil = 0;
@@ -653,6 +649,7 @@ export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		session.registry = ctx.modelRegistry;
 		session.ui = ctx.ui;
 		const bash = pi.getAllTools().find((tool) => tool.name === "bash");
 		session.conflict =

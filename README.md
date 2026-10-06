@@ -59,10 +59,24 @@ pi install npm:pi-lookout
 
 You need:
 
-- A Jev API key ([get one from TypeSafe](https://docs.typesafe.ai)): `JEV_API_KEY` in Pi's environment, or `JEV_API_KEY_FILE` pointing to a file that holds it. The file is read only when a request is made, so the key stays out of the environment of every command your agent runs.
+- Pi 1.0.4 or later, with its built-in TypeSafe provider configured: use `/login` and select TypeSafe, or set `TYPESAFE_API_KEY` in Pi's environment ([get a key from TypeSafe](https://docs.typesafe.ai)). pi-lookout uses Pi's provider authentication and classifier API.
 - [Betterleaks](https://github.com/betterleaks/betterleaks) 1.3 or a later 1.x on `PATH` (tested with 1.3.1). It removes secrets before anything leaves your machine.
 
 Nothing else to configure. If a requirement is missing, bash keeps working as usual and the status bar says why the lookout is off.
+
+Upgrading from 0.1: move `JEV_API_KEY` to `TYPESAFE_API_KEY`, or configure TypeSafe in Pi. For a file-backed credential that stays out of the environment inherited by bash, put this provider entry in Pi's `~/.pi/agent/models.json` (replace the path with your key file):
+
+```json
+{
+  "providers": {
+    "typesafe": {
+      "apiKey": "!cat /path/to/jev-key"
+    }
+  }
+}
+```
+
+Pi resolves the command at request time. `JEV_API_KEY` and `JEV_API_KEY_FILE` are no longer read by pi-lookout.
 
 ## Using it
 
@@ -81,7 +95,7 @@ While a command is running and printing, pi-lookout checks every 5 seconds:
 
 1. **Collect** the new lines, plus a little overlap and one earlier suspicious excerpt, so a later recovery can overturn an earlier error.
 2. **Sanitize** them locally (see [Privacy](#privacy)).
-3. **Ask** Jev (pinned to `jev-1.13.0`) for two probabilities and the output block that serves as evidence.
+3. **Ask** Pi's built-in TypeSafe classifier provider for two probabilities and the output block that serves as evidence, retaining the evaluated `jev-1.13.0` version.
 
 It stops the command when *intervention needed* ≥ 0.7, *continuing useful* ≤ 0.25, and Jev named an evidence block. If output arrived while Jev was answering, it re-checks straight away and stops only if that second verdict, having seen the new lines, agrees. Commands that finish within 5 seconds never contact Jev.
 
@@ -108,7 +122,7 @@ Checks ran every second in this evaluation (every 5 seconds by default), and eac
 
 With the lookout on, pi-lookout sends the command, its `purpose` and bounded excerpts of new output to TypeSafe's API. It never sends your working directory, environment, conversation or other tool results. Before each request:
 
-1. The Jev key and the value of every variable named in `PI_LOOKOUT_REDACT_ENV` (e.g. `PI_LOOKOUT_REDACT_ENV=GITHUB_TOKEN,NPM_TOKEN`) are replaced with `[REDACTED]`.
+1. The TypeSafe credential resolved by Pi and the value of every variable named in `PI_LOOKOUT_REDACT_ENV` (e.g. `PI_LOOKOUT_REDACT_ENV=GITHUB_TOKEN,NPM_TOKEN`) are replaced with `[REDACTED]`.
 2. Betterleaks scans everything with its default rules. Project allowlists, `gitleaks:allow` comments and network validation are all ignored. Any line with a finding is replaced by a marker, and `-----BEGIN … -----END` blocks are scanned whole.
 3. If scanning fails, that check sends nothing.
 
@@ -121,7 +135,7 @@ A pattern scanner can't catch every secret, so name the credentials your command
 - It reads output line by line, so a prompt without a trailing newline isn't seen until the line is completed.
 - About 24,000 characters of output can be sent per check. Anything beyond that is skipped and counted as unreviewed.
 - The model version and thresholds change only with a new release.
-- Tested on Linux with Pi 0.87. macOS should work but is untested; Windows isn't supported.
+- Requires Pi 1.0.4 or later. Tested on Linux; macOS should work but is untested; Windows isn't supported.
 
 ## Development
 
@@ -129,7 +143,7 @@ A pattern scanner can't catch every secret, so name the credentials your command
 npm install
 npm test            # offline: a fake Jev and scanner, plus real Betterleaks when it's on PATH
 npm run typecheck
-LOOKOUT_EVAL=1 JEV_API_KEY=... node --test --test-name-pattern=eval lookout.test.ts   # the live scenarios above
+LOOKOUT_EVAL=1 TYPESAFE_API_KEY=... node --test --test-name-pattern=eval lookout.test.ts   # the live scenarios above
 ```
 
 [DESIGN.md](DESIGN.md) explains the reasoning behind each decision.

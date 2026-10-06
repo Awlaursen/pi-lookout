@@ -1,6 +1,6 @@
 {
   "name": "pi-lookout",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pi extension: watches long bash commands and stops them early when Jev judges that the output shows a failure needing intervention and continuing no longer helps.",
   "type": "module",
   "license": "MIT",
@@ -37,11 +37,13 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": ">=1.0.4",
+    "@earendil-works/pi-coding-agent": ">=1.0.4",
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.87.1",
+    "@earendil-works/pi-ai": "^1.0.4",
+    "@earendil-works/pi-coding-agent": "^1.0.4",
     "@types/node": "^22.20.2",
     "typebox": "^1.3.27",
     "typescript": "^7.0.2"

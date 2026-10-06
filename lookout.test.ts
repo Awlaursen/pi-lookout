@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ClassifierResult } from "@earendil-works/pi-ai";
 import {
 	betterleaksScan,
 	checkBetterleaks,
@@ -20,8 +22,8 @@ import {
 
 // Keep the machine's Pi settings (shell path, command prefix) out of the tests.
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "pi-lookout-test-"));
-const EVAL = !!process.env.LOOKOUT_EVAL; // live Jev evaluation, needs a real JEV_API_KEY and betterleaks
-if (!EVAL) process.env.JEV_API_KEY = "test-jev-key-0123456789";
+const EVAL = !!process.env.LOOKOUT_EVAL; // live Jev evaluation, needs TypeSafe configured and betterleaks
+if (!EVAL) process.env.TYPESAFE_API_KEY = "test-jev-key-0123456789";
 delete process.env.PI_OFFLINE;
 delete process.env.PI_LOOKOUT_REDACT_ENV;
 
@@ -45,7 +47,7 @@ function jev(respond: Ask) {
 			answers: {
 				intervention_needed: { type: "noul", noul: answer.i },
 				continuation_useful: { type: "noul", noul: answer.c },
-				evidence_block: { type: "choice", choice: answer.e },
+				evidence_block: { type: "choice", choice: answer.e, probabilities: { [answer.e]: 1 }, confidence: 1 },
 			},
 		});
 	}) as unknown as typeof globalThis.fetch;
@@ -60,18 +62,20 @@ const stopOn = (text: string) => (state: any) => {
 };
 const keepGoing = () => ({ i: 0.01, c: 0.99, e: "none" });
 
-function harness(deps: Partial<Deps> = {}, bashPath = OWN_PATH) {
+function harness(deps: Partial<Deps> & { fetch?: typeof fetch; modelsPath?: string } = {}, bashPath = OWN_PATH) {
 	let tool: any;
 	const commands: Record<string, any> = {};
 	const handlers: Record<string, any> = {};
 	const statuses: string[] = [];
+	const retries: (number | undefined)[] = [];
 	const pi = {
 		registerTool: (t: any) => (tool = t),
 		registerCommand: (name: string, command: any) => (commands[name] = command),
 		on: (event: string, handler: any) => (handlers[event] = handler),
 		getAllTools: () => [{ name: "bash", sourceInfo: { path: bashPath } }],
 	};
-	lookout(pi as any, { intervalMs: 50, checkScanner: async () => undefined, scan: async () => new Set(), ...deps });
+	const { fetch: requestFetch, modelsPath = null, ...monitorDeps } = deps;
+	lookout(pi as any, { intervalMs: 50, checkScanner: async () => undefined, scan: async () => new Set(), ...monitorDeps });
 	const ui = { setStatus: (_key: string, text: string) => statuses.push(text), notify: (text: string) => statuses.push(text) };
 	const ctx = {
 		cwd: process.cwd(),
@@ -80,13 +84,26 @@ function harness(deps: Partial<Deps> = {}, bashPath = OWN_PATH) {
 		isProjectTrusted: () => false,
 		sessionManager: { getSessionId: () => "test", getSessionFile: () => undefined },
 		model: undefined,
+		modelRegistry: undefined as ModelRegistry | undefined,
 	};
 	return {
 		tool,
+		ctx,
 		statuses,
-		start: () => handlers.session_start({}, ctx),
+		retries,
+		start: async () => {
+			const runtime = await ModelRuntime.create({ modelsPath, authPath: join(process.env.PI_CODING_AGENT_DIR!, "auth.json") });
+			const registry = new ModelRegistry(runtime);
+			const classify = registry.classify.bind(registry);
+			registry.classify = (model, context, options) => {
+				retries.push(options?.maxRetries);
+				return classify(model, context, { ...options, fetch: requestFetch });
+			};
+			ctx.modelRegistry = registry;
+			return handlers.session_start({}, ctx);
+		},
 		command: (args: string) => commands.lookout.handler(args, ctx),
-		run: (params: any, signal?: AbortSignal) => tool.execute("call", params, signal, undefined, ctx),
+		run: (params: any, signal?: AbortSignal) => tool.execute("call", { timeout: EVAL ? 120 : 10, ...params }, signal, undefined, ctx),
 	};
 }
 
@@ -123,7 +140,7 @@ test("cleanLine keeps what a terminal shows", () => {
 });
 
 test("exact secrets include long lines of multi-line values, longest first", () => {
-	const secrets = exactSecrets({ JEV_API_KEY: "short-key", PI_LOOKOUT_REDACT_ENV: " A ,B", A: "line-one-long\nx\nline-three-long", B: "" });
+	const secrets = exactSecrets({ TYPESAFE_API_KEY: "short-key", PI_LOOKOUT_REDACT_ENV: " A ,B", A: "line-one-long\nx\nline-three-long", B: "" });
 	assert.deepEqual(secrets, ["line-one-long\nx\nline-three-long", "line-three-long", "line-one-long", "short-key"]);
 	assert.equal(maskExact("a line-one-long b short-key", secrets), "a [REDACTED] b [REDACTED]");
 });
@@ -137,12 +154,16 @@ test("redact collapses runs of flagged lines and shortens the rest", () => {
 
 test("parseVerdict validates types, ranges and evidence ids", () => {
 	const body = (i: unknown, c: unknown, e: unknown) => ({
-		answers: { intervention_needed: { noul: i }, continuation_useful: { noul: c }, evidence_block: { choice: e } },
-	});
+		stopReason: "stop", model: "jev-1.13.0",
+		answers: { intervention_needed: { type: "bool", probability: i }, continuation_useful: { type: "bool", probability: c }, evidence_block: { type: "choice", choice: e } },
+	}) as unknown as ClassifierResult;
 	assert.equal(parseVerdict(body(0.99, 0.01, "b1"), ["b1"]).evidence, "b1");
 	assert.equal(parseVerdict(body(0.99, 0.01, "none"), ["b1"]).model, "jev-1.13.0");
-	for (const bad of [body(Number.NaN, 0, "b1"), body(1.2, 0, "b1"), body(0.9, "0", "b1"), body(0.9, 0, "b9"), {}]) {
+	for (const bad of [body(Number.NaN, 0, "b1"), body(1.2, 0, "b1"), body(0.9, "0", "b1"), body(0.9, 0, "b9"), body(0.9, 0, undefined)]) {
 		assert.throws(() => parseVerdict(bad, ["b1"]), /malformed/);
+	}
+	for (const stopReason of ["error", "aborted"] as const) {
+		assert.throws(() => parseVerdict({ ...body(0.99, 0.01, "b1"), stopReason, errorMessage: "provider failed" }, ["b1"]), /provider failed/);
 	}
 	const v = (intervention: number, continuation: number, evidence = "b1") => ({ intervention, continuation, evidence, model: "m" });
 	assert.equal(shouldCancel(v(0.7, 0.25)), true);
@@ -177,6 +198,9 @@ test("cancels a command whose output shows a blocker, and kills its process tree
 	assert.equal(state.purpose, "Run the integration tests");
 	assert.equal(state.execution.interactive_input, "impossible: the command's stdin is closed");
 	assert.equal(JSON.parse(fake.bodies[0]).model, "jev-1.13.0");
+	assert.equal(JSON.parse(fake.bodies[0]).questions.intervention_needed.type, "noul");
+	assert.equal(JSON.parse(fake.bodies[0]).questions.continuation_useful.type, "noul");
+	assert.equal("retained_evidence" in state, false);
 });
 
 test("a continue verdict lets the command finish normally", async () => {
@@ -246,7 +270,9 @@ test("Jev errors leave the command running", async () => {
 	const result = await h.run({ command: 'echo "FATAL: boom"; sleep 0.4; echo done' });
 	assert.match(result.content[0].text.trimEnd(), /done$/);
 	assert.ok(fake.bodies.length >= 1);
-	assert.ok(h.statuses.includes("lookout: degraded (Jev HTTP 529)"));
+	assert.equal(fake.bodies.length, h.retries.length, "only one provider request per lookout check");
+	assert.ok(h.retries.every((n) => n === 0));
+	assert.ok(h.statuses.some((s) => s.includes("lookout: degraded") && s.includes("529")));
 });
 
 test("nothing is sent when lookout is off for the call, the session, or the setup", async () => {
@@ -260,11 +286,18 @@ test("nothing is sent when lookout is off for the call, the session, or the setu
 	await h.run(command);
 	assert.equal(h.statuses.at(-1), "lookout: off");
 
-	await withEnv({ JEV_API_KEY: undefined }, async () => {
+	const unavailable = harness({ fetch: fake.fetch });
+	await unavailable.start();
+	unavailable.ctx.modelRegistry!.getModelOfType = () => undefined;
+	await unavailable.command("status");
+	await unavailable.run(command);
+	assert.match(unavailable.statuses.at(-1)!, /TypeSafe classifier provider is unavailable/);
+
+	await withEnv({ TYPESAFE_API_KEY: undefined }, async () => {
 		const noKey = harness({ fetch: fake.fetch });
 		await noKey.start();
 		await noKey.run(command);
-		assert.equal(noKey.statuses.at(-1), "lookout: disabled (JEV_API_KEY is not set)");
+		assert.equal(noKey.statuses.at(-1), "lookout: disabled (TypeSafe is not configured in Pi)");
 	});
 	await withEnv({ PI_OFFLINE: "1" }, async () => {
 		const offline = harness({ fetch: fake.fetch });
@@ -323,13 +356,13 @@ test("exact values and scanner findings never reach Jev, and key blocks are scan
 		await h.run({
 			// Built at run time so the command text itself holds neither the key marker nor its lines.
 			command: `K=key B=BEGIN E=END; echo "token $MY_TOKEN"; echo "-----$B RSA PRIVATE KEY-----"; echo \${K}line1; sleep 0.3; echo \${K}line2; echo "-----$E RSA PRIVATE KEY-----"; echo after; sleep 0.3`,
-			purpose: `Check that ${secret} and ${process.env.JEV_API_KEY} stay local`,
+			purpose: `Check that ${secret} and ${process.env.TYPESAFE_API_KEY} stay local`,
 		});
 	});
 	const sent = fake.bodies.join("\n");
 	assert.ok(fake.bodies.length >= 2);
 	assert.doesNotMatch(sent, new RegExp(secret));
-	assert.doesNotMatch(sent, new RegExp(process.env.JEV_API_KEY!));
+	assert.doesNotMatch(sent, new RegExp(process.env.TYPESAFE_API_KEY!));
 	assert.doesNotMatch(sent, /keyline|BEGIN RSA/);
 	assert.match(sent, /token \[REDACTED\]/);
 	assert.match(sent, /redacted, possible secret/);
@@ -338,29 +371,36 @@ test("exact values and scanner findings never reach Jev, and key blocks are scan
 	}
 });
 
-test("the key can come from JEV_API_KEY_FILE, stays masked, and an unreadable file disables the lookout", async () => {
+test("Pi's file-backed provider credential stays masked, and an unreadable file fails open", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-lookout-key-"));
 	const keyFile = join(dir, "key");
+	const modelsPath = join(dir, "models.json");
 	const key = `file-key-${randomBytes(12).toString("hex")}`;
 	writeFileSync(keyFile, `${key}\n`);
+	writeFileSync(modelsPath, JSON.stringify({ providers: { typesafe: { apiKey: `!cat ${keyFile}` } } }));
 	const auth: string[] = [];
 	const fake = jev(keepGoing);
 	const recording = ((url: string, init: RequestInit) => {
 		auth.push((init.headers as Record<string, string>).authorization);
 		return fake.fetch(url, init);
 	}) as typeof globalThis.fetch;
-	await withEnv({ JEV_API_KEY: undefined, JEV_API_KEY_FILE: keyFile }, async () => {
-		const h = harness({ fetch: recording });
+	await withEnv({ TYPESAFE_API_KEY: undefined }, async () => {
+		const h = harness({ fetch: recording, modelsPath });
 		await h.start();
 		await h.run({ command: `cat ${keyFile}; sleep 0.3` });
 	});
 	assert.equal(auth[0], `Bearer ${key}`);
 	assert.doesNotMatch(fake.bodies.join("\n"), new RegExp(key));
-	await withEnv({ JEV_API_KEY: undefined, JEV_API_KEY_FILE: join(dir, "missing") }, async () => {
-		const h = harness({ fetch: fake.fetch });
+	writeFileSync(modelsPath, JSON.stringify({ providers: { typesafe: { apiKey: `!cat ${dir}/missing` } } }));
+	const before = fake.bodies.length;
+	await withEnv({ TYPESAFE_API_KEY: undefined }, async () => {
+		const h = harness({ fetch: fake.fetch, modelsPath });
 		await h.start();
-		assert.match(h.statuses.at(-1)!, /cannot read a key from JEV_API_KEY_FILE/);
+		const result = await h.run({ command: "echo running; sleep 0.3; echo done" });
+		assert.match(result.content[0].text, /done/);
+		assert.ok(h.statuses.some((s) => s.includes("lookout: degraded")));
 	});
+	assert.equal(fake.bodies.length, before);
 });
 
 const hasBetterleaks = (await checkBetterleaks()) === undefined;
@@ -386,7 +426,7 @@ test("Betterleaks finds plain, encoded and multi-line secrets, ignoring user all
 
 // Live evaluation of the pinned Jev model on the design's scenarios. Each scenario is a script
 // that prints what such a run would print; the expected outcome is whether pi-lookout stops it.
-// Run: LOOKOUT_EVAL=1 JEV_API_KEY=... node --test --test-name-pattern=eval lookout.test.ts
+// Run: LOOKOUT_EVAL=1 TYPESAFE_API_KEY=... node --test --test-name-pattern=eval lookout.test.ts
 const lines = (items: string[], pause = 1) => items.map((line) => `echo ${JSON.stringify(line)}; sleep ${pause}`).join("; ");
 const repeat = (n: number, line: (i: number) => string, pause = 1) => lines(Array.from({ length: n }, (_, i) => line(i + 1)), pause);
 const SCENARIOS: { name: string; stop: boolean; purpose?: string; command: string }[] = [
