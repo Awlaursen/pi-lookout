@@ -20,8 +20,12 @@ import {
 
 // Keep the machine's Pi settings (shell path, command prefix) out of the tests.
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "pi-lookout-test-"));
-const EVAL = !!process.env.LOOKOUT_EVAL; // live Jev evaluation, needs a real JEV_API_KEY and betterleaks
-if (!EVAL) process.env.JEV_API_KEY = "test-jev-key-0123456789";
+const EVAL = !!process.env.LOOKOUT_EVAL; // live evaluation, needs a real System One key and betterleaks
+if (!EVAL) {
+	// A key file or gateway inherited from the machine's Pi would take the place of the test key.
+	for (const name of ["JEV_API_KEY_FILE", "PI_LOOKOUT_SYSTEMONE_API_KEY_FILE", "PI_LOOKOUT_SYSTEMONE_URL"]) delete process.env[name];
+	process.env.JEV_API_KEY = "test-jev-key-0123456789";
+}
 delete process.env.PI_OFFLINE;
 delete process.env.PI_LOOKOUT_REDACT_ENV;
 
@@ -140,7 +144,7 @@ test("parseVerdict validates types, ranges and evidence ids", () => {
 		answers: { intervention_needed: { noul: i }, continuation_useful: { noul: c }, evidence_block: { choice: e } },
 	});
 	assert.equal(parseVerdict(body(0.99, 0.01, "b1"), ["b1"]).evidence, "b1");
-	assert.equal(parseVerdict(body(0.99, 0.01, "none"), ["b1"]).model, "jev-1.13.0");
+	assert.equal(parseVerdict(body(0.99, 0.01, "none"), ["b1"]).model, "jev-latest");
 	for (const bad of [body(Number.NaN, 0, "b1"), body(1.2, 0, "b1"), body(0.9, "0", "b1"), body(0.9, 0, "b9"), {}]) {
 		assert.throws(() => parseVerdict(bad, ["b1"]), /malformed/);
 	}
@@ -176,7 +180,7 @@ test("cancels a command whose output shows a blocker, and kills its process tree
 	const state = JSON.parse(fake.bodies[0]).state;
 	assert.equal(state.purpose, "Run the integration tests");
 	assert.equal(state.execution.interactive_input, "impossible: the command's stdin is closed");
-	assert.equal(JSON.parse(fake.bodies[0]).model, "jev-1.13.0");
+	assert.equal(JSON.parse(fake.bodies[0]).model, "jev-latest");
 });
 
 test("a continue verdict lets the command finish normally", async () => {
@@ -344,8 +348,10 @@ test("the key can come from JEV_API_KEY_FILE, stays masked, and an unreadable fi
 	const key = `file-key-${randomBytes(12).toString("hex")}`;
 	writeFileSync(keyFile, `${key}\n`);
 	const auth: string[] = [];
+	const urls: string[] = [];
 	const fake = jev(keepGoing);
 	const recording = ((url: string, init: RequestInit) => {
+		urls.push(url);
 		auth.push((init.headers as Record<string, string>).authorization);
 		return fake.fetch(url, init);
 	}) as typeof globalThis.fetch;
@@ -354,12 +360,43 @@ test("the key can come from JEV_API_KEY_FILE, stays masked, and an unreadable fi
 		await h.start();
 		await h.run({ command: `cat ${keyFile}; sleep 0.3` });
 	});
+	assert.equal(urls[0], "https://api.typesafe.ai/v1/systemone");
 	assert.equal(auth[0], `Bearer ${key}`);
 	assert.doesNotMatch(fake.bodies.join("\n"), new RegExp(key));
 	await withEnv({ JEV_API_KEY: undefined, JEV_API_KEY_FILE: join(dir, "missing") }, async () => {
 		const h = harness({ fetch: fake.fetch });
 		await h.start();
 		assert.match(h.statuses.at(-1)!, /cannot read a key from JEV_API_KEY_FILE/);
+	});
+});
+
+test("PI_LOOKOUT_SYSTEMONE_URL and PI_LOOKOUT_SYSTEMONE_API_KEY_FILE send to a gateway with its key, ahead of the Jev key", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-lookout-gateway-"));
+	const keyFile = join(dir, "key");
+	const key = `gateway-key-${randomBytes(12).toString("hex")}`;
+	writeFileSync(keyFile, `${key}\n`);
+	const gateway = "https://gateway.example/v1/systemone";
+	const auth: string[] = [];
+	const urls: string[] = [];
+	const fake = jev(keepGoing);
+	const recording = ((url: string, init: RequestInit) => {
+		urls.push(url);
+		auth.push((init.headers as Record<string, string>).authorization);
+		return fake.fetch(url, init);
+	}) as typeof globalThis.fetch;
+	await withEnv({ PI_LOOKOUT_SYSTEMONE_URL: gateway, PI_LOOKOUT_SYSTEMONE_API_KEY_FILE: keyFile }, async () => {
+		const h = harness({ fetch: recording });
+		await h.start();
+		await h.run({ command: `cat ${keyFile}; sleep 0.3` });
+	});
+	assert.equal(urls[0], gateway);
+	assert.equal(auth[0], `Bearer ${key}`);
+	assert.doesNotMatch(fake.bodies.join("\n"), new RegExp(key));
+	// An unreadable gateway key disables the lookout rather than sending the Jev key elsewhere.
+	await withEnv({ PI_LOOKOUT_SYSTEMONE_API_KEY_FILE: join(dir, "missing") }, async () => {
+		const h = harness({ fetch: fake.fetch });
+		await h.start();
+		assert.match(h.statuses.at(-1)!, /cannot read a key from PI_LOOKOUT_SYSTEMONE_API_KEY_FILE/);
 	});
 });
 

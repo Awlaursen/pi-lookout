@@ -60,6 +60,7 @@ pi install npm:pi-lookout
 You need:
 
 - A Jev API key ([get one from TypeSafe](https://docs.typesafe.ai)): `JEV_API_KEY` in Pi's environment, or `JEV_API_KEY_FILE` pointing to a file that holds it. The file is read only when a request is made, so the key stays out of the environment of every command your agent runs.
+- Optionally, a gateway that serves the TypeSafe System One API: set `PI_LOOKOUT_SYSTEMONE_URL` to its endpoint and `PI_LOOKOUT_SYSTEMONE_API_KEY_FILE` to a file holding the gateway's key, which then takes the place of the Jev key. For example `PI_LOOKOUT_SYSTEMONE_URL=https://gateway.example/v1/systemone`.
 - [Betterleaks](https://github.com/betterleaks/betterleaks) 1.3 or a later 1.x on `PATH` (tested with 1.3.1). It removes secrets before anything leaves your machine.
 
 Nothing else to configure. If a requirement is missing, bash keeps working as usual and the status bar says why the lookout is off.
@@ -81,7 +82,7 @@ While a command is running and printing, pi-lookout checks every 5 seconds:
 
 1. **Collect** the new lines, plus a little overlap and one earlier suspicious excerpt, so a later recovery can overturn an earlier error.
 2. **Sanitize** them locally (see [Privacy](#privacy)).
-3. **Ask** Jev (pinned to `jev-1.13.0`) for two probabilities and the output block that serves as evidence.
+3. **Ask** Jev (`jev-latest`; the thresholds were chosen against `jev-1.13.0`) for two probabilities and the output block that serves as evidence.
 
 It stops the command when *intervention needed* ≥ 0.7, *continuing useful* ≤ 0.25, and Jev named an evidence block. If output arrived while Jev was answering, it re-checks straight away and stops only if that second verdict, having seen the new lines, agrees. Commands that finish within 5 seconds never contact Jev.
 

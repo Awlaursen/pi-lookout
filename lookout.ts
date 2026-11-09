@@ -20,8 +20,10 @@ import { Type } from "typebox";
 // continuing is useless, the command is aborted and its partial output returned with the evidence.
 // Anything that goes wrong on the monitoring side leaves the command running.
 
-const MODEL = "jev-1.13.0"; // pinned: the thresholds below were chosen against this version
-const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+// The thresholds below were chosen against jev-1.13.0. jev-latest is the name every System One
+// gateway backend serves, so a gateway can answer from any of its accounts.
+const MODEL = "jev-latest";
+const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const CHECK_INTERVAL_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 20_000;
 const SCAN_TIMEOUT_MS = 10_000;
@@ -97,23 +99,31 @@ const redactNames = (env: NodeJS.ProcessEnv) =>
 		.map((name) => name.trim())
 		.filter(Boolean);
 
-/** The values masked before anything else looks at the text, longest first. */
-/**
- * The Jev key: JEV_API_KEY, or else the contents of the file JEV_API_KEY_FILE names. The file is
- * read on use, so the key can stay out of the environment every bash command inherits.
- */
-export function jevKey(env: NodeJS.ProcessEnv): string | undefined {
-	if (env.JEV_API_KEY) return env.JEV_API_KEY;
-	if (!env.JEV_API_KEY_FILE) return;
+/** The System One endpoint: PI_LOOKOUT_SYSTEMONE_URL (e.g. a gateway), or else TypeSafe's API. */
+export const systemOneEndpoint = (env: NodeJS.ProcessEnv) => env.PI_LOOKOUT_SYSTEMONE_URL || DEFAULT_ENDPOINT;
+
+function readKeyFile(path: string): string | undefined {
 	try {
-		return readFileSync(env.JEV_API_KEY_FILE, "utf8").trim() || undefined;
+		return readFileSync(path, "utf8").trim() || undefined;
 	} catch {
 		return undefined;
 	}
 }
 
+/**
+ * The System One key: the file PI_LOOKOUT_SYSTEMONE_API_KEY_FILE names when set, otherwise
+ * JEV_API_KEY, or else the file JEV_API_KEY_FILE names. Files are read on use, so the key can stay
+ * out of the environment every bash command inherits.
+ */
+export function systemOneKey(env: NodeJS.ProcessEnv): string | undefined {
+	if (env.PI_LOOKOUT_SYSTEMONE_API_KEY_FILE) return readKeyFile(env.PI_LOOKOUT_SYSTEMONE_API_KEY_FILE);
+	if (env.JEV_API_KEY) return env.JEV_API_KEY;
+	if (env.JEV_API_KEY_FILE) return readKeyFile(env.JEV_API_KEY_FILE);
+}
+
+/** The values masked before anything else looks at the text, longest first. */
 export function exactSecrets(env: NodeJS.ProcessEnv): string[] {
-	const values = [jevKey(env), ...redactNames(env).map((name) => env[name])].filter(
+	const values = [systemOneKey(env), ...redactNames(env).map((name) => env[name])].filter(
 		(value): value is string => !!value,
 	);
 	// A multi-line value can straddle two checks, so its longer lines are masked on their own too.
@@ -125,8 +135,13 @@ export const maskExact = (text: string, secrets: string[]) =>
 	secrets.reduce((masked, secret) => masked.split(secret).join("[REDACTED]"), text);
 
 function setupProblem(env: NodeJS.ProcessEnv): string | undefined {
-	if (!jevKey(env)) {
-		return env.JEV_API_KEY_FILE ? `cannot read a key from JEV_API_KEY_FILE (${env.JEV_API_KEY_FILE})` : "JEV_API_KEY is not set";
+	if (!systemOneKey(env)) {
+		const fileVar = env.PI_LOOKOUT_SYSTEMONE_API_KEY_FILE
+			? "PI_LOOKOUT_SYSTEMONE_API_KEY_FILE"
+			: env.JEV_API_KEY_FILE
+				? "JEV_API_KEY_FILE"
+				: undefined;
+		return fileVar ? `cannot read a key from ${fileVar} (${env[fileVar]})` : "JEV_API_KEY is not set";
 	}
 	const unset = redactNames(env).filter((name) => !env[name]);
 	if (unset.length) return `PI_LOOKOUT_REDACT_ENV names unset variables: ${unset.join(", ")}`;
@@ -337,9 +352,9 @@ export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 		const choices = Object.fromEntries<string | null>(blockIds.map((id) => [id, null]));
 		choices.none =
 			"No supplied block establishes a current problem requiring intervention, or later output shows that it was resolved.";
-		const res = await deps.fetch(ENDPOINT, {
+		const res = await deps.fetch(systemOneEndpoint(process.env), {
 			method: "POST",
-			headers: { authorization: `Bearer ${jevKey(process.env)}`, "content-type": "application/json" },
+			headers: { authorization: `Bearer ${systemOneKey(process.env)}`, "content-type": "application/json" },
 			body: JSON.stringify({
 				model: MODEL,
 				state,

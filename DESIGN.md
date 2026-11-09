@@ -27,6 +27,7 @@ Once published, the intended installation is `pi install npm:pi-lookout`, subjec
 | Requirement | Contract |
 | --- | --- |
 | Jev authentication | `JEV_API_KEY` in Pi's process environment, or `JEV_API_KEY_FILE` naming a file read per request so the key stays out of the environment bash commands inherit; never put the value in package or project settings |
+| Optional System One gateway | `PI_LOOKOUT_SYSTEMONE_URL` replaces the TypeSafe endpoint with a gateway that serves the same System One API; `PI_LOOKOUT_SYSTEMONE_API_KEY_FILE` names a file holding the gateway's key and, when set, is used instead of the Jev key. These choose an endpoint, not a backend |
 | Secret scanner | A supported `betterleaks` executable on `PATH` |
 | Optional exact redaction | `PI_LOOKOUT_REDACT_ENV`, a comma-separated list of environment-variable names whose values must also be masked |
 
@@ -36,7 +37,7 @@ The user's launcher or secret manager can supply these environment variables. Th
 
 Betterleaks is an explicit prerequisite. Do not add binary downloads, postinstall scripts, or a scanner-provider framework. Document the tested scanner version and reject unsupported versions for monitoring while leaving bash usable. A package update can expand the supported versions after verification.
 
-Use an evaluated Jev model version fixed by the package release. Keep the endpoint, questions, thresholds, and buffer limits internal initially. The proposed polling interval is five seconds; expose timing configuration only if actual usage needs it. No custom settings file is required for the first release.
+Request `jev-latest`, the model name every System One gateway backend serves; the thresholds were evaluated against `jev-1.13.0`. Keep the default endpoint, questions, thresholds, and buffer limits internal initially. The proposed polling interval is five seconds; expose timing configuration only if actual usage needs it. No custom settings file is required for the first release.
 
 On startup, check local prerequisites without printing secrets or issuing a paid test request. Missing prerequisites produce a clear disabled status, not silent claims of protection. Runtime API failures produce a degraded status and bounded backoff. Honor Pi's documented offline mode by making no Jev requests.
 
@@ -199,7 +200,7 @@ Do not invent a root cause or claim remote rollback. Do not automatically rerun 
 
 ## Verification before release
 
-Evaluate the pinned Jev model on synthetic or sanitized representative logs. Mocked responses verify orchestration, not judgment quality. No shadow deployment is required.
+Evaluate the requested model on synthetic or sanitized representative logs. Mocked responses verify orchestration, not judgment quality. No shadow deployment is required.
 
 | Case | Expected behavior |
 | --- | --- |
