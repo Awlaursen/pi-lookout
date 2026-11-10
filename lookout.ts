@@ -100,7 +100,7 @@ const redactNames = (env: NodeJS.ProcessEnv) =>
 		.filter(Boolean);
 
 /** The System One endpoint: PI_LOOKOUT_SYSTEMONE_URL (e.g. a gateway), or else TypeSafe's API. */
-export const systemOneEndpoint = (env: NodeJS.ProcessEnv) => env.PI_LOOKOUT_SYSTEMONE_URL || DEFAULT_ENDPOINT;
+export const systemOneEndpoint = (env: NodeJS.ProcessEnv) => env.PI_LOOKOUT_SYSTEMONE_URL ?? DEFAULT_ENDPOINT;
 
 function readKeyFile(path: string): string | undefined {
 	try {
@@ -116,14 +116,20 @@ function readKeyFile(path: string): string | undefined {
  * out of the environment every bash command inherits.
  */
 export function systemOneKey(env: NodeJS.ProcessEnv): string | undefined {
-	if (env.PI_LOOKOUT_SYSTEMONE_API_KEY_FILE) return readKeyFile(env.PI_LOOKOUT_SYSTEMONE_API_KEY_FILE);
+	// Set, even to "", means a gateway: an empty name must not fall back to the Jev key.
+	if (env.PI_LOOKOUT_SYSTEMONE_API_KEY_FILE !== undefined) return readKeyFile(env.PI_LOOKOUT_SYSTEMONE_API_KEY_FILE);
+	return jevKey(env);
+}
+
+function jevKey(env: NodeJS.ProcessEnv): string | undefined {
 	if (env.JEV_API_KEY) return env.JEV_API_KEY;
 	if (env.JEV_API_KEY_FILE) return readKeyFile(env.JEV_API_KEY_FILE);
 }
 
 /** The values masked before anything else looks at the text, longest first. */
 export function exactSecrets(env: NodeJS.ProcessEnv): string[] {
-	const values = [systemOneKey(env), ...redactNames(env).map((name) => env[name])].filter(
+	// Every configured key is masked, including a Jev key a gateway does not use: commands inherit it.
+	const values = [systemOneKey(env), jevKey(env), ...redactNames(env).map((name) => env[name])].filter(
 		(value): value is string => !!value,
 	);
 	// A multi-line value can straddle two checks, so its longer lines are masked on their own too.
@@ -135,8 +141,14 @@ export const maskExact = (text: string, secrets: string[]) =>
 	secrets.reduce((masked, secret) => masked.split(secret).join("[REDACTED]"), text);
 
 function setupProblem(env: NodeJS.ProcessEnv): string | undefined {
+	// A gateway URL and its key come together, so neither key is ever sent to the other's host.
+	const url = env.PI_LOOKOUT_SYSTEMONE_URL;
+	if ((url === undefined) !== (env.PI_LOOKOUT_SYSTEMONE_API_KEY_FILE === undefined))
+		return "PI_LOOKOUT_SYSTEMONE_URL and PI_LOOKOUT_SYSTEMONE_API_KEY_FILE must be set together";
+	if (url !== undefined && !isHttpsUrl(url)) return `PI_LOOKOUT_SYSTEMONE_URL is not an https URL (${url})`;
 	if (!systemOneKey(env)) {
-		const fileVar = env.PI_LOOKOUT_SYSTEMONE_API_KEY_FILE
+		const fileVar =
+			env.PI_LOOKOUT_SYSTEMONE_API_KEY_FILE !== undefined
 			? "PI_LOOKOUT_SYSTEMONE_API_KEY_FILE"
 			: env.JEV_API_KEY_FILE
 				? "JEV_API_KEY_FILE"
@@ -145,6 +157,14 @@ function setupProblem(env: NodeJS.ProcessEnv): string | undefined {
 	}
 	const unset = redactNames(env).filter((name) => !env[name]);
 	if (unset.length) return `PI_LOOKOUT_REDACT_ENV names unset variables: ${unset.join(", ")}`;
+}
+
+function isHttpsUrl(url: string): boolean {
+	try {
+		return new URL(url).protocol === "https:";
+	} catch {
+		return false;
+	}
 }
 
 const isOffline = () => /^(1|true|yes)$/i.test(process.env.PI_OFFLINE ?? "");

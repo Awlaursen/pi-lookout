@@ -387,17 +387,31 @@ test("PI_LOOKOUT_SYSTEMONE_URL and PI_LOOKOUT_SYSTEMONE_API_KEY_FILE send to a g
 	await withEnv({ PI_LOOKOUT_SYSTEMONE_URL: gateway, PI_LOOKOUT_SYSTEMONE_API_KEY_FILE: keyFile }, async () => {
 		const h = harness({ fetch: recording });
 		await h.start();
-		await h.run({ command: `cat ${keyFile}; sleep 0.3` });
+		// The unused Jev key is masked too: commands inherit it.
+		await h.run({ command: `cat ${keyFile}; echo ${process.env.JEV_API_KEY}; sleep 0.3` });
 	});
 	assert.equal(urls[0], gateway);
 	assert.equal(auth[0], `Bearer ${key}`);
 	assert.doesNotMatch(fake.bodies.join("\n"), new RegExp(key));
-	// An unreadable gateway key disables the lookout rather than sending the Jev key elsewhere.
-	await withEnv({ PI_LOOKOUT_SYSTEMONE_API_KEY_FILE: join(dir, "missing") }, async () => {
-		const h = harness({ fetch: fake.fetch });
-		await h.start();
-		assert.match(h.statuses.at(-1)!, /cannot read a key from PI_LOOKOUT_SYSTEMONE_API_KEY_FILE/);
-	});
+	assert.doesNotMatch(fake.bodies.join("\n"), new RegExp(process.env.JEV_API_KEY!));
+	// Each problem disables the lookout rather than sending either key to the other's host.
+	const problems: [NodeJS.ProcessEnv, RegExp][] = [
+		[{ PI_LOOKOUT_SYSTEMONE_URL: gateway, PI_LOOKOUT_SYSTEMONE_API_KEY_FILE: join(dir, "missing") }, /cannot read a key from PI_LOOKOUT_SYSTEMONE_API_KEY_FILE/],
+		[{ PI_LOOKOUT_SYSTEMONE_URL: gateway, PI_LOOKOUT_SYSTEMONE_API_KEY_FILE: "" }, /cannot read a key from PI_LOOKOUT_SYSTEMONE_API_KEY_FILE/],
+		[{ PI_LOOKOUT_SYSTEMONE_URL: gateway }, /must be set together/],
+		[{ PI_LOOKOUT_SYSTEMONE_API_KEY_FILE: keyFile }, /must be set together/],
+		[{ PI_LOOKOUT_SYSTEMONE_URL: "http://gateway.example/v1/systemone", PI_LOOKOUT_SYSTEMONE_API_KEY_FILE: keyFile }, /not an https URL/],
+	];
+	for (const [env, reason] of problems) {
+		const before = urls.length;
+		await withEnv(env, async () => {
+			const h = harness({ fetch: recording });
+			await h.start();
+			assert.match(h.statuses.at(-1)!, reason);
+			await h.run({ command: "echo hello; sleep 0.3" });
+		});
+		assert.equal(urls.length, before, `no request for ${JSON.stringify(env)}`);
+	}
 });
 
 const hasBetterleaks = (await checkBetterleaks()) === undefined;
