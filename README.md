@@ -60,7 +60,7 @@ pi install npm:pi-lookout
 You need:
 
 - A Jev API key ([get one from TypeSafe](https://docs.typesafe.ai)): `JEV_API_KEY` in Pi's environment, or `JEV_API_KEY_FILE` pointing to a file that holds it. The file is read only when a request is made, so the key stays out of the environment of every command your agent runs.
-- Optionally, a gateway that serves the TypeSafe System One API: set `PI_LOOKOUT_SYSTEMONE_URL` to its endpoint and `PI_LOOKOUT_SYSTEMONE_API_KEY_FILE` to a file holding the gateway's key, which then takes the place of the Jev key. For example `PI_LOOKOUT_SYSTEMONE_URL=https://gateway.example/v1/systemone`.
+- Optionally, a gateway that serves the TypeSafe System One API: set `PI_LOOKOUT_SYSTEMONE_URL` and `PI_LOOKOUT_SYSTEMONE_API_KEY_FILE` together, with an HTTPS URL and a readable key file. A missing setting or unreadable key file (including an empty file setting) disables lookout rather than sending a key to the other host. For example `PI_LOOKOUT_SYSTEMONE_URL=https://gateway.example/v1/systemone`.
 - [Betterleaks](https://github.com/betterleaks/betterleaks) 1.3 or a later 1.x on `PATH` (tested with 1.3.1). It removes secrets before anything leaves your machine.
 
 Nothing else to configure. If a requirement is missing, bash keeps working as usual and the status bar says why the lookout is off.
@@ -107,9 +107,9 @@ Checks ran every second in this evaluation (every 5 seconds by default), and eac
 
 ## Privacy
 
-With the lookout on, pi-lookout sends the command, its `purpose` and bounded excerpts of new output to TypeSafe's API. It never sends your working directory, environment, conversation or other tool results. Before each request:
+With the lookout on, pi-lookout sends the command, its `purpose` and bounded excerpts of new output to TypeSafe's API, or to the configured gateway when one is set. It never sends your working directory, environment, conversation or other tool results. Before each request:
 
-1. The Jev key and the value of every variable named in `PI_LOOKOUT_REDACT_ENV` (e.g. `PI_LOOKOUT_REDACT_ENV=GITHUB_TOKEN,NPM_TOKEN`) are replaced with `[REDACTED]`.
+1. The Jev key and, when set, the gateway key are both masked, since commands may inherit them; the value of every variable named in `PI_LOOKOUT_REDACT_ENV` (e.g. `PI_LOOKOUT_REDACT_ENV=GITHUB_TOKEN,NPM_TOKEN`) are replaced with `[REDACTED]`.
 2. Betterleaks scans everything with its default rules. Project allowlists, `gitleaks:allow` comments and network validation are all ignored. Any line with a finding is replaced by a marker, and `-----BEGIN … -----END` blocks are scanned whole.
 3. If scanning fails, that check sends nothing.
 
@@ -121,7 +121,7 @@ A pattern scanner can't catch every secret, so name the credentials your command
 - Stopping a command kills its local process tree. Remote work that an upload or deployment started is not rolled back.
 - It reads output line by line, so a prompt without a trailing newline isn't seen until the line is completed.
 - About 24,000 characters of output can be sent per check. Anything beyond that is skipped and counted as unreviewed.
-- The model version and thresholds change only with a new release.
+- Requests use `jev-latest`, so the answering model can change without a release; a gateway may also answer from another backend. Thresholds change only with a new release.
 - Tested on Linux with Pi 0.87. macOS should work but is untested; Windows isn't supported.
 
 ## Development
@@ -132,6 +132,8 @@ npm test            # offline: a fake Jev and scanner, plus real Betterleaks whe
 npm run typecheck
 LOOKOUT_EVAL=1 JEV_API_KEY=... node --test --test-name-pattern=eval lookout.test.ts   # the live scenarios above
 ```
+
+Eval keeps gateway settings from the environment; unset `PI_LOOKOUT_SYSTEMONE_URL` and `PI_LOOKOUT_SYSTEMONE_API_KEY_FILE` to evaluate against TypeSafe with `JEV_API_KEY`.
 
 [DESIGN.md](DESIGN.md) explains the reasoning behind each decision.
 

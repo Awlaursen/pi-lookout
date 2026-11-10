@@ -6,7 +6,7 @@ A publishable Pi extension that watches a running bash command and uses Jev to c
 
 A test runner can repeat a shared setup error for minutes; an upload can repeatedly reject the same credentials. Returning control early lets the agent investigate instead of waiting for the process to exit.
 
-`pi-lookout` is the npm package name. Version 0.1.0 implements this design in `lookout.ts` and is published on npm; later versions are staged from `v*` tags by `.github/workflows/publish.yml`.
+`pi-lookout` is the npm package name. Version 0.2.0 implements this design in `lookout.ts`; 0.1.0 is published on npm, and later versions are staged from `v*` tags by `.github/workflows/publish.yml`.
 
 ## Public contract
 
@@ -27,7 +27,7 @@ Once published, the intended installation is `pi install npm:pi-lookout`, subjec
 | Requirement | Contract |
 | --- | --- |
 | Jev authentication | `JEV_API_KEY` in Pi's process environment, or `JEV_API_KEY_FILE` naming a file read per request so the key stays out of the environment bash commands inherit; never put the value in package or project settings |
-| Optional System One gateway | `PI_LOOKOUT_SYSTEMONE_URL` replaces the TypeSafe endpoint with a gateway that serves the same System One API; `PI_LOOKOUT_SYSTEMONE_API_KEY_FILE` names a file holding the gateway's key and, when set, is used instead of the Jev key. These choose an endpoint, not a backend |
+| Optional System One gateway | `PI_LOOKOUT_SYSTEMONE_URL` replaces the TypeSafe endpoint with a gateway that serves the same System One API; `PI_LOOKOUT_SYSTEMONE_API_KEY_FILE` names a file holding the gateway's key and, when set, is used instead of the Jev key. Both settings must be set together, the URL must use HTTPS, and missing settings or an unreadable key file disable lookout without falling back. These choose an endpoint, not a backend |
 | Secret scanner | A supported `betterleaks` executable on `PATH` |
 | Optional exact redaction | `PI_LOOKOUT_REDACT_ENV`, a comma-separated list of environment-variable names whose values must also be masked |
 
