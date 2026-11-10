@@ -31,7 +31,7 @@ Once published, the intended installation is `pi install npm:pi-lookout`, subjec
 | Secret scanner | A supported `betterleaks` executable on `PATH` |
 | Optional exact redaction | `PI_LOOKOUT_REDACT_ENV`, a comma-separated list of environment-variable names whose values must also be masked |
 
-Always mask the extension's own Jev API key. Optional exact redaction preserves protection for arbitrary credentials that a pattern scanner may miss, without knowing how the user stores or delivers them. Read only the named values for local masking; never send an environment dump. If explicitly requested redaction inputs are missing, report incomplete setup and do not monitor until corrected.
+Always mask the extension's own Jev API key and, when set, the gateway key. Optional exact redaction preserves protection for arbitrary credentials that a pattern scanner may miss, without knowing how the user stores or delivers them. Read only the named values for local masking; never send an environment dump. If explicitly requested redaction inputs are missing, report incomplete setup and do not monitor until corrected.
 
 The user's launcher or secret manager can supply these environment variables. The extension does not implement credential acquisition, vault access, login, or secret-file discovery.
 
@@ -176,7 +176,7 @@ Output arriving between a snapshot and its verdict may show recovery. Saving sec
 The extension owns sanitization of everything it sends to Jev. It must not rely on another extension's final-result hooks, which may not run before streaming context is transmitted.
 
 1. Reassemble chunks across UTF-8, line, and multiline-secret boundaries. Hold incomplete sensitive blocks; if bounded buffering cannot resolve them, omit uncertain content.
-2. Mask the Jev key and the explicitly named environment values locally. Ignore empty values. Apply masking across chunk boundaries, not separately to each raw callback.
+2. Mask the Jev key, the gateway key when set, and the explicitly named environment values locally. Ignore empty values. Apply masking across chunk boundaries, not separately to each raw callback.
 3. Scan **all outbound text**, including command and purpose, with Betterleaks using package-controlled rules and explicit options. Do not inherit project configuration, allowlists, inline exemptions, or active credential-validation settings.
 4. Map findings back to the original text and redact them. For decoded findings or ambiguous source locations, omit the affected line/block, or the whole snapshot if its extent cannot be established.
 5. Send only the sanitized state. Scanner failures, timeouts, uncertain mappings, or missing required redaction inputs skip transmission and report degraded monitoring without interrupting bash.
@@ -185,7 +185,7 @@ A redacted findings report is not a sanitized copy of the input. Verify Betterle
 
 Keep transient raw buffers and findings local to the sanitization path and release them when no longer needed. Add no persistent log store, telemetry, or upload of full command output. Reuse Pi's normal output handling for the agent; pi-lookout's redaction protects its own outbound requests and diagnostic excerpts, not every part of the user's Pi session.
 
-Betterleaks cannot guarantee discovery of every unknown secret. Exact masking covers the extension's own credential and credentials the user explicitly names; it does not discover all secrets on a machine. Document this coverage honestly.
+Betterleaks cannot guarantee discovery of every unknown secret. Exact masking covers the Jev key, the gateway key when set, and credentials the user explicitly names; it does not discover all secrets on a machine. Document this coverage honestly.
 
 ## Result returned after cancellation
 

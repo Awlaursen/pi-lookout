@@ -576,6 +576,8 @@ export function lookout(pi: ExtensionAPI, overrides: Partial<Deps> = {}): void {
 				pending = [...lines, ...pending];
 				pendingChars = pending.reduce((n, line) => n + line.length, 0);
 				trim();
+				// A failed re-check waits for the backoff instead of retrying at once.
+				armed = false;
 				failed(err instanceof Error ? err.message : "check failed");
 			} finally {
 				if (current === ctl) current = undefined;

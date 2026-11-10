@@ -109,7 +109,7 @@ Checks ran every second in this evaluation (every 5 seconds by default), and eac
 
 With the lookout on, pi-lookout sends the command, its `purpose` and bounded excerpts of new output to TypeSafe's API, or to the configured gateway when one is set. It never sends your working directory, environment, conversation or other tool results. Before each request:
 
-1. The Jev key and, when set, the gateway key are both masked, since commands may inherit them; the value of every variable named in `PI_LOOKOUT_REDACT_ENV` (e.g. `PI_LOOKOUT_REDACT_ENV=GITHUB_TOKEN,NPM_TOKEN`) are replaced with `[REDACTED]`.
+1. The Jev key and, when set, the gateway key are both masked, since commands may print either; the values of variables named in `PI_LOOKOUT_REDACT_ENV` (e.g. `PI_LOOKOUT_REDACT_ENV=GITHUB_TOKEN,NPM_TOKEN`) are replaced with `[REDACTED]`.
 2. Betterleaks scans everything with its default rules. Project allowlists, `gitleaks:allow` comments and network validation are all ignored. Any line with a finding is replaced by a marker, and `-----BEGIN … -----END` blocks are scanned whole.
 3. If scanning fails, that check sends nothing.
 
