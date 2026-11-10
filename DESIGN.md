@@ -6,7 +6,7 @@ A publishable Pi extension that watches a running bash command and uses Jev to c
 
 A test runner can repeat a shared setup error for minutes; an upload can repeatedly reject the same credentials. Returning control early lets the agent investigate instead of waiting for the process to exit.
 
-`pi-lookout` is the npm package name. Version 0.1.0 implements this design in `lookout.ts` and is published on npm; later versions are staged from `v*` tags by `.github/workflows/publish.yml`.
+`pi-lookout` is the npm package name. Version 0.2.0 implements this design in `lookout.ts`; 0.1.0 is published on npm, and later versions are staged from `v*` tags by `.github/workflows/publish.yml`.
 
 ## Public contract
 
@@ -27,16 +27,17 @@ Once published, the intended installation is `pi install npm:pi-lookout`, subjec
 | Requirement | Contract |
 | --- | --- |
 | Jev authentication | `JEV_API_KEY` in Pi's process environment, or `JEV_API_KEY_FILE` naming a file read per request so the key stays out of the environment bash commands inherit; never put the value in package or project settings |
+| Optional System One gateway | `PI_LOOKOUT_SYSTEMONE_URL` replaces the TypeSafe endpoint with a gateway that serves the same System One API; `PI_LOOKOUT_SYSTEMONE_API_KEY_FILE` names a file holding the gateway's key and, when set, is used instead of the Jev key. Both settings must be set together, the URL must use HTTPS, and missing settings or an unreadable key file disable lookout without falling back. These choose an endpoint, not a backend |
 | Secret scanner | A supported `betterleaks` executable on `PATH` |
 | Optional exact redaction | `PI_LOOKOUT_REDACT_ENV`, a comma-separated list of environment-variable names whose values must also be masked |
 
-Always mask the extension's own Jev API key. Optional exact redaction preserves protection for arbitrary credentials that a pattern scanner may miss, without knowing how the user stores or delivers them. Read only the named values for local masking; never send an environment dump. If explicitly requested redaction inputs are missing, report incomplete setup and do not monitor until corrected.
+Always mask the extension's own Jev API key and, when set, the gateway key. Optional exact redaction preserves protection for arbitrary credentials that a pattern scanner may miss, without knowing how the user stores or delivers them. Read only the named values for local masking; never send an environment dump. If explicitly requested redaction inputs are missing, report incomplete setup and do not monitor until corrected.
 
 The user's launcher or secret manager can supply these environment variables. The extension does not implement credential acquisition, vault access, login, or secret-file discovery.
 
 Betterleaks is an explicit prerequisite. Do not add binary downloads, postinstall scripts, or a scanner-provider framework. Document the tested scanner version and reject unsupported versions for monitoring while leaving bash usable. A package update can expand the supported versions after verification.
 
-Use an evaluated Jev model version fixed by the package release. Keep the endpoint, questions, thresholds, and buffer limits internal initially. The proposed polling interval is five seconds; expose timing configuration only if actual usage needs it. No custom settings file is required for the first release.
+Request `jev-latest`, the model name every System One gateway backend serves; the thresholds were evaluated against `jev-1.13.0`. Keep the default endpoint, questions, thresholds, and buffer limits internal initially. The proposed polling interval is five seconds; expose timing configuration only if actual usage needs it. No custom settings file is required for the first release.
 
 On startup, check local prerequisites without printing secrets or issuing a paid test request. Missing prerequisites produce a clear disabled status, not silent claims of protection. Runtime API failures produce a degraded status and bounded backoff. Honor Pi's documented offline mode by making no Jev requests.
 
@@ -175,7 +176,7 @@ Output arriving between a snapshot and its verdict may show recovery. Saving sec
 The extension owns sanitization of everything it sends to Jev. It must not rely on another extension's final-result hooks, which may not run before streaming context is transmitted.
 
 1. Reassemble chunks across UTF-8, line, and multiline-secret boundaries. Hold incomplete sensitive blocks; if bounded buffering cannot resolve them, omit uncertain content.
-2. Mask the Jev key and the explicitly named environment values locally. Ignore empty values. Apply masking across chunk boundaries, not separately to each raw callback.
+2. Mask the Jev key, the gateway key when set, and the explicitly named environment values locally. Ignore empty values. Apply masking across chunk boundaries, not separately to each raw callback.
 3. Scan **all outbound text**, including command and purpose, with Betterleaks using package-controlled rules and explicit options. Do not inherit project configuration, allowlists, inline exemptions, or active credential-validation settings.
 4. Map findings back to the original text and redact them. For decoded findings or ambiguous source locations, omit the affected line/block, or the whole snapshot if its extent cannot be established.
 5. Send only the sanitized state. Scanner failures, timeouts, uncertain mappings, or missing required redaction inputs skip transmission and report degraded monitoring without interrupting bash.
@@ -184,7 +185,7 @@ A redacted findings report is not a sanitized copy of the input. Verify Betterle
 
 Keep transient raw buffers and findings local to the sanitization path and release them when no longer needed. Add no persistent log store, telemetry, or upload of full command output. Reuse Pi's normal output handling for the agent; pi-lookout's redaction protects its own outbound requests and diagnostic excerpts, not every part of the user's Pi session.
 
-Betterleaks cannot guarantee discovery of every unknown secret. Exact masking covers the extension's own credential and credentials the user explicitly names; it does not discover all secrets on a machine. Document this coverage honestly.
+Betterleaks cannot guarantee discovery of every unknown secret. Exact masking covers the Jev key, the gateway key when set, and credentials the user explicitly names; it does not discover all secrets on a machine. Document this coverage honestly.
 
 ## Result returned after cancellation
 
@@ -199,7 +200,7 @@ Do not invent a root cause or claim remote rollback. Do not automatically rerun 
 
 ## Verification before release
 
-Evaluate the pinned Jev model on synthetic or sanitized representative logs. Mocked responses verify orchestration, not judgment quality. No shadow deployment is required.
+Evaluate the requested model on synthetic or sanitized representative logs. Mocked responses verify orchestration, not judgment quality. No shadow deployment is required.
 
 | Case | Expected behavior |
 | --- | --- |
